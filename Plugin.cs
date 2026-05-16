@@ -14,7 +14,7 @@ public class Plugin : TerrariaPlugin
     public const string PluginName = "积分系统";
     public override string Name => PluginName;
     public override string Author => "淦";
-    public override Version Version => new(1, 1, 0);
+    public override Version Version => new(1, 1, 1);
     public override string Description => "签到 · 抽奖 · 转账 · 仓库 · 掷骰子 · 猜数字 · 抢劫 · 回收 一体化积分系统";
     #endregion
 
@@ -90,6 +90,10 @@ public class Plugin : TerrariaPlugin
         // ---- 管理 ----
         Commands.ChatCommands.Add(new Command("points.admin", CmdAdminPoints, "积分管理", "pointsadmin")
         { HelpText = "管理积分。用法: /积分管理 <add|set|reset> <玩家名> [数量]" });
+
+        // ★★★ 新增：独立热重载指令（与 TShock 内置 /reload 同名，但权限为 points.reload）
+        Commands.ChatCommands.Add(new Command("points.reload", CmdReloadPoints, "reload", "重载积分")
+        { HelpText = "热重载积分系统配置文件（仅重载本插件配置，不重载整个 TShock）。" });
     }
     #endregion
 
@@ -127,6 +131,7 @@ public class Plugin : TerrariaPlugin
         }
     }
 
+    /// <summary>响应 TShock 内置 /reload 的钩子</summary>
     private void OnReload(ReloadEventArgs args)
     {
         LoadAllConfig();
@@ -134,8 +139,27 @@ public class Plugin : TerrariaPlugin
             $"[c/AAFFAA:{PluginName}] 配置已重新加载。",
             Utils.color.R, Utils.color.G, Utils.color.B);
     }
+
+    // ★★★ 新增：独立 /reload 命令处理（权限 points.reload，不需要 tshock.cfg.reload）
+    private void CmdReloadPoints(CommandArgs args)
+    {
+        var plr = args.Player;
+
+        // 重载前保存当前数据
+        Cache.Save(CachePath);
+
+        LoadAllConfig();
+
+        plr.SendMessage(
+            Utils.TextGradient($"[{PluginName}] 积分系统配置已热重载！", plr),
+            Utils.color.R, Utils.color.G, Utils.color.B);
+        TShock.Log.ConsoleInfo($"[{PluginName}] 玩家 {plr.Name} 使用 /reload 重载了积分系统配置。");
+    }
     #endregion
 
+    // ==================== 以下所有代码保持不变 ====================
+    // （定时保存、注册、签到、抽奖、仓库、取物品、回收、转账、
+    //   掷骰子、猜数字、抢劫、查看、管理、辅助方法等全部保持原样）
     #region 定时保存
     private short _tick;
     private short _sec;
@@ -151,8 +175,6 @@ public class Plugin : TerrariaPlugin
         }
     }
     #endregion
-
-    // ======================== 指令实现 ============================
 
     #region 注册 /reg
     private void CmdRegister(CommandArgs args)
@@ -233,7 +255,7 @@ public class Plugin : TerrariaPlugin
     }
     #endregion
 
-        #region 抽奖 /lottery（物品存入仓库）
+    #region 抽奖 /lottery（物品存入仓库）
     private void CmdLottery(CommandArgs args)
     {
         var plr = args.Player;
@@ -252,10 +274,8 @@ public class Plugin : TerrariaPlugin
             return;
         }
 
-        // 扣积分
         data.Points -= Config.LotteryCost;
 
-        // 按权重抽选
         int totalWeight = Config.LotteryItems.Sum(i => i.Weight);
         int roll = Utils.Random.Next(totalWeight);
         int cumulative = 0;
@@ -267,7 +287,6 @@ public class Plugin : TerrariaPlugin
         }
         won ??= Config.LotteryItems[0];
 
-        // 存入仓库
         var stored = new CacheData.StoredItem
         {
             Id = Cache.NextStorageId(data),
@@ -282,7 +301,6 @@ public class Plugin : TerrariaPlugin
         var itemName = Lang.GetItemNameValue(won.ItemID) ?? $"物品#{won.ItemID}";
         int recycleValue = CalcRecycleValue(won.ItemID, won.Stack);
 
-        // ★ 修复：分别发送文本和带图标的行，避免颜色标签干扰 [i:...] 渲染
         plr.SendMessage(
             $"[c/FFD700:{PluginName}] 抽奖花费 {Config.LotteryCost} 积分，获得了：",
             Utils.color.R, Utils.color.G, Utils.color.B);
@@ -305,19 +323,16 @@ public class Plugin : TerrariaPlugin
 
         if (data.LotteryStorage.Count == 0)
         {
-            // 标题仍可使用颜色，因为没有物品图标
             plr.SendMessage(
                 $"[c/FFD700:{PluginName}] 你的抽奖仓库是空的。使用 /抽奖 获取物品吧！",
                 Utils.color.R, Utils.color.G, Utils.color.B);
             return;
         }
 
-        // 标题行
         plr.SendMessage(
             $"══════ [c/FFD700:{plr.Name} 的抽奖仓库] ══════",
             Utils.color.R, Utils.color.G, Utils.color.B);
 
-        // ★ 逐行发送物品信息 — 不使用 TextGradient，确保 [i:...] 正常渲染
         foreach (var item in data.LotteryStorage.OrderBy(i => i.Id))
         {
             var itemName = Lang.GetItemNameValue(item.ItemID) ?? $"物品#{item.ItemID}";
@@ -325,13 +340,11 @@ public class Plugin : TerrariaPlugin
             string prefixStr = item.Prefix > 0 ? $" [前缀:{item.Prefix}]" : "";
             string stackStr = item.Stack > 1 ? $" x{item.Stack}" : "";
 
-            // 每件物品单独一行，不使用任何颜色标签包裹图标部分
             plr.SendMessage(
                 $"  #{item.Id} {Utils.ItemIcon(item.ItemID, item.Stack)} {itemName}{stackStr}{prefixStr} | 回收: {recycleVal} 积分",
                 Utils.color.R, Utils.color.G, Utils.color.B);
         }
 
-        // 底部信息
         plr.SendMessage(
             $"══════════════════════════════",
             Utils.color.R, Utils.color.G, Utils.color.B);
@@ -364,7 +377,6 @@ public class Plugin : TerrariaPlugin
 
         if (param == "all")
         {
-            // 领取全部
             int count = data.LotteryStorage.Count;
             foreach (var item in data.LotteryStorage)
                 plr.GiveItem(item.ItemID, item.Stack, item.Prefix);
@@ -516,7 +528,6 @@ public class Plugin : TerrariaPlugin
             return;
         }
 
-        // 手续费
         int fee = (int)(amount * Config.TransferFeeRate);
         int totalCost = amount + fee;
 
@@ -526,7 +537,6 @@ public class Plugin : TerrariaPlugin
             return;
         }
 
-        // 大小写不敏感查找目标
         var key = Cache.Players.Keys.FirstOrDefault(
             k => k.Equals(targetName, StringComparison.OrdinalIgnoreCase));
         if (key == null)
@@ -547,12 +557,10 @@ public class Plugin : TerrariaPlugin
             return;
         }
 
-        // 执行转账
         senderData.Points -= totalCost;
         targetData.Points += amount;
         Cache.Save(CachePath);
 
-        // 通知发送方
         var sbSender = new StringBuilder();
         sbSender.AppendLine($"[{PluginName}] 转账成功！");
         sbSender.AppendLine($"  向 [c/FFD700:{key}] 转账: -{amount} 积分");
@@ -561,7 +569,6 @@ public class Plugin : TerrariaPlugin
         plr.SendMessage(Utils.TextGradient(sbSender.ToString(), plr),
             Utils.color.R, Utils.color.G, Utils.color.B);
 
-        // 通知接收方（如果在线）
         var targetPlr = TShock.Players.FirstOrDefault(
             p => p != null && p.Active && p.Name != null
                  && p.Name.Equals(key, StringComparison.OrdinalIgnoreCase));
@@ -906,14 +913,13 @@ public class Plugin : TerrariaPlugin
 
     // ======================== 辅助方法 ============================
 
-    #region 计算回收价值（基于物品基础价值 × 回收比例 × 堆叠数）
-    private static int CalcRecycleValue(int itemID, int stack)
+    #region 计算回收价值
+    private static int CalcRecycleValue(int itemid, int stack)
     {
         try
         {
-            // 通过 SetDefaults 创建临时 Item 获取其基础价值
             Item tempItem = new Item();
-            tempItem.SetDefaults(itemID);
+            tempItem.SetDefaults(itemid);
             if (tempItem.value < Config.RecycleMinValue)
                 return 0;
             return (int)(tempItem.value * Config.RecycleRate * stack);

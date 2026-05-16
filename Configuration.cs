@@ -3,9 +3,6 @@ using System.Text.RegularExpressions;
 
 namespace PointsSystem;
 
-/// <summary>
-/// 插件配置文件
-/// </summary>
 internal class Configuration
 {
     #region 基础设置
@@ -86,7 +83,10 @@ internal class Configuration
     public int LotteryCost { get; set; } = 20;
 
     [JsonProperty("抽奖物品列表", Order = 51)]
-    public List<LotteryEntry> LotteryItems { get; set; } = new()
+    public List<LotteryEntry> LotteryItems { get; set; } = DefaultLotteryItems();
+
+    /// <summary>默认抽奖列表（仅一处定义，避免重复）</summary>
+    private static List<LotteryEntry> DefaultLotteryItems() => new()
     {
         new LotteryEntry { ItemID = 73,  Weight = 5 },
         new LotteryEntry { ItemID = 155, Weight = 3 },
@@ -95,7 +95,7 @@ internal class Configuration
     };
     #endregion
 
-    #region 回收设置（仅限抽奖仓库中的物品）
+    #region 回收设置
     [JsonProperty("回收比例", Order = 60)]
     public double RecycleRate { get; set; } = 0.5;
 
@@ -108,7 +108,7 @@ internal class Configuration
     public int TransferMinPoints { get; set; } = 1;
 
     [JsonProperty("转账手续费比例", Order = 71)]
-    public double TransferFeeRate { get; set; } = 0.0; // 0 = 免手续费
+    public double TransferFeeRate { get; set; } = 0.0;
     #endregion
 
     #region 抽奖物品条目
@@ -148,7 +148,19 @@ internal class Configuration
         try
         {
             string json = File.ReadAllText(path);
-            var cfg = JsonConvert.DeserializeObject<Configuration>(json)!;
+
+            // ★★★ 关键修复：Replace 模式杜绝默认值被追加到 JSON 列表后面
+            var settings = new JsonSerializerSettings
+            {
+                ObjectCreationHandling = ObjectCreationHandling.Replace
+            };
+
+            var cfg = JsonConvert.DeserializeObject<Configuration>(json, settings)!;
+
+            // 防御：如果配置中列表为 null，回填默认值（仅当 JSON 中明确为 null 时）
+            if (cfg.LotteryItems == null || cfg.LotteryItems.Count == 0)
+                cfg.LotteryItems = DefaultLotteryItems();
+
             cache = CacheData.Load(GetCachePath(path));
             return cfg;
         }
