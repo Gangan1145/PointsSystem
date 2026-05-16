@@ -48,15 +48,54 @@ internal class CacheData
         [JsonProperty("上次抢劫", Order = 7)]
         public DateTime? LastRobTime { get; set; } = null;
 
+        /// <summary>抽奖仓库 — 抽中的物品暂存于此，可领取或回收</summary>
+        [JsonProperty("抽奖仓库", Order = 8)]
+        public List<StoredItem> LotteryStorage { get; set; } = new();
+
         /// <summary>是否已注册（密码非空即已注册）</summary>
         [JsonIgnore]
         public bool IsRegistered => !string.IsNullOrEmpty(PasswordHash);
+    }
+
+    /// <summary>
+    /// 仓库中暂存的物品条目
+    /// </summary>
+    public class StoredItem
+    {
+        /// <summary>唯一序号（用于玩家指令引用）</summary>
+        [JsonProperty("序号", Order = 0)]
+        public int Id { get; set; }
+
+        /// <summary>物品 ID</summary>
+        [JsonProperty("物品ID", Order = 1)]
+        public int ItemID { get; set; }
+
+        /// <summary>堆叠数量</summary>
+        [JsonProperty("数量", Order = 2)]
+        public int Stack { get; set; } = 1;
+
+        /// <summary>前缀</summary>
+        [JsonProperty("前缀", Order = 3)]
+        public int Prefix { get; set; } = 0;
+
+        /// <summary>获得时间</summary>
+        [JsonProperty("获得时间", Order = 4)]
+        public DateTime ObtainedAt { get; set; } = DateTime.UtcNow;
     }
 
     #region 数据管理方法
     public PlayerCache GetOrCreate(string name) => Players.GetOrAdd(name, _ => new PlayerCache());
 
     public bool TryGet(string name, out PlayerCache data) => Players.TryGetValue(name, out data!);
+
+    /// <summary>
+    /// 为玩家仓库中的物品分配唯一序号（基于当前最大序号+1）
+    /// </summary>
+    public int NextStorageId(PlayerCache data)
+    {
+        if (data.LotteryStorage.Count == 0) return 1;
+        return data.LotteryStorage.Max(i => i.Id) + 1;
+    }
     #endregion
 
     #region 文件读写

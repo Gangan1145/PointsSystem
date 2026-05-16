@@ -88,19 +88,27 @@ internal class Configuration
     [JsonProperty("抽奖物品列表", Order = 51)]
     public List<LotteryEntry> LotteryItems { get; set; } = new()
     {
-        new LotteryEntry { ItemID = 73,  Weight = 5 },   // 蓝月
-        new LotteryEntry { ItemID = 155, Weight = 3 },   // 村正
-        new LotteryEntry { ItemID = 65,  Weight = 2 },   // 星怒
-        new LotteryEntry { ItemID = 125, Weight = 1 },   // 魔法导弹
+        new LotteryEntry { ItemID = 73,  Weight = 5 },
+        new LotteryEntry { ItemID = 155, Weight = 3 },
+        new LotteryEntry { ItemID = 65,  Weight = 2 },
+        new LotteryEntry { ItemID = 125, Weight = 1 },
     };
     #endregion
 
-    #region 回收设置
+    #region 回收设置（仅限抽奖仓库中的物品）
     [JsonProperty("回收比例", Order = 60)]
     public double RecycleRate { get; set; } = 0.5;
 
     [JsonProperty("回收最小价值(铜币)", Order = 61)]
-    public int RecycleMinValue { get; set; } = 100; // 低于此价值的物品不可回收
+    public int RecycleMinValue { get; set; } = 100;
+    #endregion
+
+    #region 转账设置
+    [JsonProperty("转账最小积分", Order = 70)]
+    public int TransferMinPoints { get; set; } = 1;
+
+    [JsonProperty("转账手续费比例", Order = 71)]
+    public double TransferFeeRate { get; set; } = 0.0; // 0 = 免手续费
     #endregion
 
     #region 抽奖物品条目

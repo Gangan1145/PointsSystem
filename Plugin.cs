@@ -14,8 +14,8 @@ public class Plugin : TerrariaPlugin
     public const string PluginName = "积分系统";
     public override string Name => PluginName;
     public override string Author => "淦";
-    public override Version Version => new(1, 0, 0);
-    public override string Description => "签到 · 抽奖 · 掷骰子 · 猜数字 · 抢劫 · 回收 一体化积分系统";
+    public override Version Version => new(1, 1, 0);
+    public override string Description => "签到 · 抽奖 · 转账 · 仓库 · 掷骰子 · 猜数字 · 抢劫 · 回收 一体化积分系统";
     #endregion
 
     #region 文件路径
@@ -37,11 +37,7 @@ public class Plugin : TerrariaPlugin
     {
         LoadAllConfig();
         GeneralHooks.ReloadEvent += OnReload;
-
-        // 注册所有指令
         RegisterCommands();
-
-        // 事件钩子
         ServerApi.Hooks.GameUpdate.Register(this, OnGameUpdate);
     }
 
@@ -55,13 +51,25 @@ public class Plugin : TerrariaPlugin
         Commands.ChatCommands.Add(new Command("points.use", CmdSignIn, "签到", "sign")
         { HelpText = "每日签到获取积分，连续签到有额外奖励。" });
 
-        // ---- 抽奖 ----
+        // ---- 抽奖（物品存入仓库）----
         Commands.ChatCommands.Add(new Command("points.use", CmdLottery, "抽奖", "lottery")
-        { HelpText = "消耗积分抽取随机物品。" });
+        { HelpText = "消耗积分抽取随机物品，存入仓库。" });
 
-        // ---- 回收 ----
+        // ---- 仓库查看 ----
+        Commands.ChatCommands.Add(new Command("points.use", CmdStorage, "仓库", "storage")
+        { HelpText = "查看抽奖仓库中的物品。" });
+
+        // ---- 领取物品 ----
+        Commands.ChatCommands.Add(new Command("points.use", CmdClaim, "取物品", "claim")
+        { HelpText = "从仓库中领取物品。用法: /取物品 <序号|all>" });
+
+        // ---- 回收仓库物品 ----
         Commands.ChatCommands.Add(new Command("points.use", CmdRecycle, "回收", "recycle")
-        { HelpText = "回收手中物品换取积分。" });
+        { HelpText = "回收仓库中的物品换取积分。用法: /回收 <序号|all>" });
+
+        // ---- 转账 ----
+        Commands.ChatCommands.Add(new Command("points.use", CmdTransfer, "转账", "transfer", "pay")
+        { HelpText = "向其他玩家转账积分。用法: /转账 <玩家名> <数量>" });
 
         // ---- 掷骰子 ----
         Commands.ChatCommands.Add(new Command("points.use", CmdDice, "掷骰子", "dice")
@@ -122,7 +130,6 @@ public class Plugin : TerrariaPlugin
     private void OnReload(ReloadEventArgs args)
     {
         LoadAllConfig();
-        // 使用明确的重载：SendMessage(string, byte, byte, byte)
         args.Player.SendMessage(
             $"[c/AAFFAA:{PluginName}] 配置已重新加载。",
             Utils.color.R, Utils.color.G, Utils.color.B);
@@ -135,13 +142,8 @@ public class Plugin : TerrariaPlugin
     private void OnGameUpdate(EventArgs args)
     {
         if (!Config.Enabled) return;
-
         _tick++;
-        if (_tick >= 60)   // 每秒
-        {
-            _sec++;
-            _tick = 0;
-        }
+        if (_tick >= 60) { _sec++; _tick = 0; }
         if (_sec >= Config.SyncIntervalSec)
         {
             Cache.Save(CachePath);
@@ -166,25 +168,21 @@ public class Plugin : TerrariaPlugin
             plr.SendErrorMessage("用法: /注册 <密码>");
             return;
         }
-
         var pwd = args.Parameters[0];
         if (pwd.Length < 3)
         {
             plr.SendErrorMessage("密码至少需要 3 个字符。");
             return;
         }
-
         var data = Cache.GetOrCreate(plr.Name);
         if (data.IsRegistered)
         {
             plr.SendErrorMessage("你已经注册过了！如需重置密码请联系管理员。");
             return;
         }
-
         data.PasswordHash = Utils.HashPassword(pwd);
         Cache.Save(CachePath);
 
-        // 使用 byte 重载避免歧义
         plr.SendMessage(
             Utils.TextGradient($"[{PluginName}] 注册成功！欢迎 {plr.Name}，现在你可以使用签到、抽奖等功能了。", plr),
             Utils.color.R, Utils.color.G, Utils.color.B);
@@ -201,53 +199,41 @@ public class Plugin : TerrariaPlugin
         var data = Cache.GetOrCreate(plr.Name);
         var today = DateTime.UtcNow.Date;
 
-        // 检查是否今天已签到
         if (data.LastSignInDate.HasValue && data.LastSignInDate.Value.Date == today)
         {
             plr.SendErrorMessage("你今天已经签到过了，明天再来吧！");
             return;
         }
 
-        // 判断连续签到
-        if (data.LastSignInDate.HasValue &&
-            data.LastSignInDate.Value.Date == today.AddDays(-1))
-        {
-            // 昨天签到了 → 连续
+        if (data.LastSignInDate.HasValue && data.LastSignInDate.Value.Date == today.AddDays(-1))
             data.ConsecutiveSignIns++;
-        }
         else
-        {
-            // 中断 → 重置
             data.ConsecutiveSignIns = 1;
-        }
 
         data.TotalSignIns++;
         data.LastSignInDate = DateTime.UtcNow;
 
-        // 计算奖励：基础 + min(连续次数-1, 最大额外次数) × 连续奖励
         int extraDays = Math.Min(data.ConsecutiveSignIns - 1,
             Config.SignMaxConsecutiveBonus / Math.Max(1, Config.SignConsecutiveBonus));
         int bonus = extraDays * Config.SignConsecutiveBonus;
         int earned = Config.SignBasePoints + bonus;
-
         data.Points += earned;
         Cache.Save(CachePath);
 
         var sb = new StringBuilder();
         sb.AppendLine($"[{PluginName}] 签到成功！");
         sb.AppendLine($"  基础积分: +{Config.SignBasePoints}");
-        if (bonus > 0)
-            sb.AppendLine($"  连续签到奖励: +{bonus} (连续 {data.ConsecutiveSignIns} 天)");
+        if (bonus > 0) sb.AppendLine($"  连续签到奖励: +{bonus} (连续 {data.ConsecutiveSignIns} 天)");
         sb.AppendLine($"  本次获得: [c/FFD700:+{earned} 积分]");
         sb.AppendLine($"  当前积分: {data.Points}");
-        sb.AppendLine($"  累计签到: {data.TotalSignIns} 次");
+        sb.AppendLine($"  累计签到: {data.TotalSignIns} 次 / 连续签到: {data.ConsecutiveSignIns} 天");
 
         plr.SendMessage(Utils.TextGradient(sb.ToString(), plr),
             Utils.color.R, Utils.color.G, Utils.color.B);
     }
     #endregion
 
-    #region 抽奖 /lottery
+        #region 抽奖 /lottery（物品存入仓库）
     private void CmdLottery(CommandArgs args)
     {
         var plr = args.Player;
@@ -269,7 +255,7 @@ public class Plugin : TerrariaPlugin
         // 扣积分
         data.Points -= Config.LotteryCost;
 
-        // 按权重抽选物品
+        // 按权重抽选
         int totalWeight = Config.LotteryItems.Sum(i => i.Weight);
         int roll = Utils.Random.Next(totalWeight);
         int cumulative = 0;
@@ -277,69 +263,317 @@ public class Plugin : TerrariaPlugin
         foreach (var entry in Config.LotteryItems)
         {
             cumulative += entry.Weight;
-            if (roll < cumulative)
-            {
-                won = entry;
-                break;
-            }
+            if (roll < cumulative) { won = entry; break; }
         }
-        won ??= Config.LotteryItems[0]; // 保险
+        won ??= Config.LotteryItems[0];
 
-        // 给予物品
-        plr.GiveItem(won.ItemID, won.Stack, won.Prefix);
+        // 存入仓库
+        var stored = new CacheData.StoredItem
+        {
+            Id = Cache.NextStorageId(data),
+            ItemID = won.ItemID,
+            Stack = won.Stack,
+            Prefix = won.Prefix,
+            ObtainedAt = DateTime.UtcNow
+        };
+        data.LotteryStorage.Add(stored);
         Cache.Save(CachePath);
 
         var itemName = Lang.GetItemNameValue(won.ItemID) ?? $"物品#{won.ItemID}";
+        int recycleValue = CalcRecycleValue(won.ItemID, won.Stack);
+
+        // ★ 修复：分别发送文本和带图标的行，避免颜色标签干扰 [i:...] 渲染
         plr.SendMessage(
-            Utils.TextGradient(
-                $"[{PluginName}] 抽奖花费 {Config.LotteryCost} 积分，" +
-                $"获得了 {Utils.ItemIcon(won.ItemID, won.Stack)} [c/FFD700:{itemName}]" +
-                $"{(won.Stack > 1 ? $" x{won.Stack}" : "")}！剩余积分: {data.Points}", plr),
+            $"[c/FFD700:{PluginName}] 抽奖花费 {Config.LotteryCost} 积分，获得了：",
+            Utils.color.R, Utils.color.G, Utils.color.B);
+        plr.SendMessage(
+            $"  {Utils.ItemIcon(won.ItemID, won.Stack)} [c/FFD700:{itemName}]{(won.Stack > 1 ? $" x{won.Stack}" : "")}  (序号 #{stored.Id})",
+            Utils.color.R, Utils.color.G, Utils.color.B);
+        plr.SendMessage(
+            $"  回收价值: {recycleValue} 积分 | 剩余积分: {data.Points}",
             Utils.color.R, Utils.color.G, Utils.color.B);
     }
     #endregion
 
-    #region 回收 /recycle
+    #region 仓库 /storage
+    private void CmdStorage(CommandArgs args)
+    {
+        var plr = args.Player;
+        if (!CheckRegistered(plr)) return;
+
+        var data = Cache.GetOrCreate(plr.Name);
+
+        if (data.LotteryStorage.Count == 0)
+        {
+            // 标题仍可使用颜色，因为没有物品图标
+            plr.SendMessage(
+                $"[c/FFD700:{PluginName}] 你的抽奖仓库是空的。使用 /抽奖 获取物品吧！",
+                Utils.color.R, Utils.color.G, Utils.color.B);
+            return;
+        }
+
+        // 标题行
+        plr.SendMessage(
+            $"══════ [c/FFD700:{plr.Name} 的抽奖仓库] ══════",
+            Utils.color.R, Utils.color.G, Utils.color.B);
+
+        // ★ 逐行发送物品信息 — 不使用 TextGradient，确保 [i:...] 正常渲染
+        foreach (var item in data.LotteryStorage.OrderBy(i => i.Id))
+        {
+            var itemName = Lang.GetItemNameValue(item.ItemID) ?? $"物品#{item.ItemID}";
+            int recycleVal = CalcRecycleValue(item.ItemID, item.Stack);
+            string prefixStr = item.Prefix > 0 ? $" [前缀:{item.Prefix}]" : "";
+            string stackStr = item.Stack > 1 ? $" x{item.Stack}" : "";
+
+            // 每件物品单独一行，不使用任何颜色标签包裹图标部分
+            plr.SendMessage(
+                $"  #{item.Id} {Utils.ItemIcon(item.ItemID, item.Stack)} {itemName}{stackStr}{prefixStr} | 回收: {recycleVal} 积分",
+                Utils.color.R, Utils.color.G, Utils.color.B);
+        }
+
+        // 底部信息
+        plr.SendMessage(
+            $"══════════════════════════════",
+            Utils.color.R, Utils.color.G, Utils.color.B);
+        plr.SendMessage(
+            $"共 {data.LotteryStorage.Count} 件 | 使用 /取物品 <序号|all> 领取 | /回收 <序号|all> 兑换积分",
+            Utils.color.R, Utils.color.G, Utils.color.B);
+    }
+    #endregion
+
+    #region 取物品 /claim
+    private void CmdClaim(CommandArgs args)
+    {
+        var plr = args.Player;
+        if (!CheckRegistered(plr)) return;
+
+        var data = Cache.GetOrCreate(plr.Name);
+
+        if (data.LotteryStorage.Count == 0)
+        {
+            plr.SendErrorMessage("你的抽奖仓库是空的。");
+            return;
+        }
+        if (args.Parameters.Count < 1)
+        {
+            plr.SendErrorMessage("用法: /取物品 <序号|all>");
+            return;
+        }
+
+        string param = args.Parameters[0].ToLower();
+
+        if (param == "all")
+        {
+            // 领取全部
+            int count = data.LotteryStorage.Count;
+            foreach (var item in data.LotteryStorage)
+                plr.GiveItem(item.ItemID, item.Stack, item.Prefix);
+
+            data.LotteryStorage.Clear();
+            Cache.Save(CachePath);
+
+            plr.SendMessage(
+                Utils.TextGradient($"[{PluginName}] 已领取全部 {count} 件物品到背包。"),
+                Utils.color.R, Utils.color.G, Utils.color.B);
+        }
+        else if (int.TryParse(param, out int id))
+        {
+            var item = data.LotteryStorage.FirstOrDefault(i => i.Id == id);
+            if (item == null)
+            {
+                plr.SendErrorMessage($"找不到序号 #{id} 的物品。使用 /仓库 查看你的物品列表。");
+                return;
+            }
+            plr.GiveItem(item.ItemID, item.Stack, item.Prefix);
+            data.LotteryStorage.Remove(item);
+            Cache.Save(CachePath);
+
+            var itemName = Lang.GetItemNameValue(item.ItemID) ?? $"物品#{item.ItemID}";
+            plr.SendMessage(
+                Utils.TextGradient(
+                    $"[{PluginName}] 已领取 #{id} {Utils.ItemIcon(item.ItemID, item.Stack)} [c/FFD700:{itemName}]" +
+                    $"{(item.Stack > 1 ? $" x{item.Stack}" : "")}。"),
+                Utils.color.R, Utils.color.G, Utils.color.B);
+        }
+        else
+        {
+            plr.SendErrorMessage("无效参数，请输入序号数字或 \"all\"。");
+        }
+    }
+    #endregion
+
+    #region 回收 /recycle（仅限仓库物品）
     private void CmdRecycle(CommandArgs args)
     {
         var plr = args.Player;
         if (!CheckRegistered(plr)) return;
 
-        var item = plr.SelectedItem;
-        if (item == null || item.type == ItemID.None || item.stack <= 0)
-        {
-            plr.SendErrorMessage("请手持要回收的物品。");
-            return;
-        }
-        if (item.value < Config.RecycleMinValue)
-        {
-            plr.SendErrorMessage($"该物品价值太低（{item.value} 铜币），不可回收。最低要求: {Config.RecycleMinValue} 铜币。");
-            return;
-        }
-
-        int pointsEarned = (int)(item.value * Config.RecycleRate * item.stack);
-        if (pointsEarned <= 0)
-        {
-            plr.SendErrorMessage("该物品回收价值为 0，无法回收。");
-            return;
-        }
-
         var data = Cache.GetOrCreate(plr.Name);
-        string itemName = Lang.GetItemNameValue(item.type) ?? $"物品#{item.type}";
 
-        // 回收整组
-        int stack = item.stack;
-        plr.TPlayer.inventory[plr.TPlayer.selectedItem].TurnToAir();
-        plr.SendData(PacketTypes.PlayerSlot, "", plr.Index, plr.TPlayer.selectedItem);
+        if (data.LotteryStorage.Count == 0)
+        {
+            plr.SendErrorMessage("你的抽奖仓库是空的，没有可回收的物品。");
+            return;
+        }
+        if (args.Parameters.Count < 1)
+        {
+            plr.SendErrorMessage("用法: /回收 <序号|all>");
+            return;
+        }
 
-        data.Points += pointsEarned;
+        string param = args.Parameters[0].ToLower();
+
+        if (param == "all")
+        {
+            int totalPoints = 0;
+            int count = 0;
+            foreach (var item in data.LotteryStorage)
+            {
+                int val = CalcRecycleValue(item.ItemID, item.Stack);
+                if (val > 0)
+                {
+                    totalPoints += val;
+                    count++;
+                }
+            }
+            if (totalPoints <= 0)
+            {
+                plr.SendErrorMessage("仓库中没有可回收的物品（物品价值低于最低门槛）。");
+                return;
+            }
+
+            data.Points += totalPoints;
+            data.LotteryStorage.Clear();
+            Cache.Save(CachePath);
+
+            plr.SendMessage(
+                Utils.TextGradient(
+                    $"[{PluginName}] 已回收全部 {count} 件物品，获得 +{totalPoints} 积分。当前积分: {data.Points}"),
+                Utils.color.R, Utils.color.G, Utils.color.B);
+        }
+        else if (int.TryParse(param, out int id))
+        {
+            var item = data.LotteryStorage.FirstOrDefault(i => i.Id == id);
+            if (item == null)
+            {
+                plr.SendErrorMessage($"找不到序号 #{id} 的物品。使用 /仓库 查看你的物品列表。");
+                return;
+            }
+
+            int val = CalcRecycleValue(item.ItemID, item.Stack);
+            if (val <= 0)
+            {
+                plr.SendErrorMessage($"该物品回收价值为 0（低于最低门槛 {Config.RecycleMinValue} 铜币），无法回收。");
+                return;
+            }
+
+            data.Points += val;
+            data.LotteryStorage.Remove(item);
+            Cache.Save(CachePath);
+
+            var itemName = Lang.GetItemNameValue(item.ItemID) ?? $"物品#{item.ItemID}";
+            plr.SendMessage(
+                Utils.TextGradient(
+                    $"[{PluginName}] 已回收 #{id} {Utils.ItemIcon(item.ItemID, item.Stack)} [c/FFD700:{itemName}]，" +
+                    $"获得 +{val} 积分。当前积分: {data.Points}"),
+                Utils.color.R, Utils.color.G, Utils.color.B);
+        }
+        else
+        {
+            plr.SendErrorMessage("无效参数，请输入序号数字或 \"all\"。");
+        }
+    }
+    #endregion
+
+    #region 转账 /transfer
+    private void CmdTransfer(CommandArgs args)
+    {
+        var plr = args.Player;
+        if (!CheckRegistered(plr)) return;
+
+        if (args.Parameters.Count < 2)
+        {
+            plr.SendErrorMessage("用法: /转账 <玩家名> <数量>");
+            return;
+        }
+
+        string targetName = args.Parameters[0];
+        if (!int.TryParse(args.Parameters[1], out int amount) || amount <= 0)
+        {
+            plr.SendErrorMessage("请输入有效的正整数量。");
+            return;
+        }
+        if (amount < Config.TransferMinPoints)
+        {
+            plr.SendErrorMessage($"单次转账最少 {Config.TransferMinPoints} 积分。");
+            return;
+        }
+
+        var senderData = Cache.GetOrCreate(plr.Name);
+        if (senderData.Points < amount)
+        {
+            plr.SendErrorMessage($"积分不足！你当前有 {senderData.Points} 积分，需要 {amount} 积分。");
+            return;
+        }
+
+        // 手续费
+        int fee = (int)(amount * Config.TransferFeeRate);
+        int totalCost = amount + fee;
+
+        if (senderData.Points < totalCost)
+        {
+            plr.SendErrorMessage($"积分不足（含手续费 {fee}）！需要 {totalCost} 积分，当前 {senderData.Points} 积分。");
+            return;
+        }
+
+        // 大小写不敏感查找目标
+        var key = Cache.Players.Keys.FirstOrDefault(
+            k => k.Equals(targetName, StringComparison.OrdinalIgnoreCase));
+        if (key == null)
+        {
+            plr.SendErrorMessage($"找不到玩家 \"{targetName}\" 的积分数据。对方可能尚未注册。");
+            return;
+        }
+        if (key.Equals(plr.Name, StringComparison.OrdinalIgnoreCase))
+        {
+            plr.SendErrorMessage("你不能给自己转账！");
+            return;
+        }
+
+        var targetData = Cache.GetOrCreate(key);
+        if (!targetData.IsRegistered)
+        {
+            plr.SendErrorMessage($"玩家 {key} 尚未注册积分系统，无法接收转账。");
+            return;
+        }
+
+        // 执行转账
+        senderData.Points -= totalCost;
+        targetData.Points += amount;
         Cache.Save(CachePath);
 
-        plr.SendMessage(
-            Utils.TextGradient(
-                $"[{PluginName}] 回收了 {Utils.ItemIcon(item.type, stack)} [c/FFD700:{itemName}] x{stack}，" +
-                $"获得 +{pointsEarned} 积分。当前积分: {data.Points}", plr),
+        // 通知发送方
+        var sbSender = new StringBuilder();
+        sbSender.AppendLine($"[{PluginName}] 转账成功！");
+        sbSender.AppendLine($"  向 [c/FFD700:{key}] 转账: -{amount} 积分");
+        if (fee > 0) sbSender.AppendLine($"  手续费: -{fee} 积分");
+        sbSender.AppendLine($"  当前积分: {senderData.Points}");
+        plr.SendMessage(Utils.TextGradient(sbSender.ToString(), plr),
             Utils.color.R, Utils.color.G, Utils.color.B);
+
+        // 通知接收方（如果在线）
+        var targetPlr = TShock.Players.FirstOrDefault(
+            p => p != null && p.Active && p.Name != null
+                 && p.Name.Equals(key, StringComparison.OrdinalIgnoreCase));
+        if (targetPlr != null)
+        {
+            targetPlr.SendMessage(
+                Utils.TextGradient(
+                    $"[{PluginName}] [c/AAFFAA:{plr.Name}] 向你转账了 {amount} 积分！当前积分: {targetData.Points}", targetPlr),
+                Utils.color.R, Utils.color.G, Utils.color.B);
+        }
+
+        TShock.Log.ConsoleInfo($"[{PluginName}] {plr.Name} → {key} 转账 {amount} 积分 (手续费 {fee})。");
     }
     #endregion
 
@@ -348,23 +582,20 @@ public class Plugin : TerrariaPlugin
     {
         var plr = args.Player;
         if (!CheckRegistered(plr)) return;
-
         var data = Cache.GetOrCreate(plr.Name);
 
-        // 冷却检查
         if (data.LastDiceTime.HasValue)
         {
             var elapsed = (DateTime.UtcNow - data.LastDiceTime.Value).TotalSeconds;
             if (elapsed < Config.DiceCooldownSec)
             {
-                int remain = (int)(Config.DiceCooldownSec - elapsed);
-                plr.SendErrorMessage($"掷骰子冷却中，请等待 {FormatTime(remain)}。");
+                plr.SendErrorMessage($"掷骰子冷却中，请等待 {FormatTime((int)(Config.DiceCooldownSec - elapsed))}。");
                 return;
             }
         }
         if (data.Points < Config.DiceCost)
         {
-            plr.SendErrorMessage($"积分不足！掷骰子需要 {Config.DiceCost} 积分，你当前有 {data.Points} 积分。");
+            plr.SendErrorMessage($"积分不足！需要 {Config.DiceCost} 积分，当前 {data.Points}。");
             return;
         }
 
@@ -374,8 +605,7 @@ public class Plugin : TerrariaPlugin
         bool win = Utils.Random.NextDouble() < Config.DiceWinProbability;
         int dice1 = Utils.Random.Next(1, 7);
         int dice2 = Utils.Random.Next(1, 7);
-        int total = dice1 + dice2;
-        string diceIcon = $"🎲 {dice1} + {dice2} = {total}";
+        string diceIcon = $"🎲 {dice1} + {dice2} = {dice1 + dice2}";
 
         string msg;
         if (win)
@@ -399,7 +629,6 @@ public class Plugin : TerrariaPlugin
     {
         var plr = args.Player;
         if (!CheckRegistered(plr)) return;
-
         var data = Cache.GetOrCreate(plr.Name);
 
         if (args.Parameters.Count < 1 || !int.TryParse(args.Parameters[0], out int guess))
@@ -412,21 +641,18 @@ public class Plugin : TerrariaPlugin
             plr.SendErrorMessage($"猜测数字必须在 {Config.GuessRangeMin} ~ {Config.GuessRangeMax} 之间。");
             return;
         }
-
-        // 冷却检查
         if (data.LastGuessTime.HasValue)
         {
             var elapsed = (DateTime.UtcNow - data.LastGuessTime.Value).TotalSeconds;
             if (elapsed < Config.GuessCooldownSec)
             {
-                int remain = (int)(Config.GuessCooldownSec - elapsed);
-                plr.SendErrorMessage($"猜数字冷却中，请等待 {FormatTime(remain)}。");
+                plr.SendErrorMessage($"猜数字冷却中，请等待 {FormatTime((int)(Config.GuessCooldownSec - elapsed))}。");
                 return;
             }
         }
         if (data.Points < Config.GuessCost)
         {
-            plr.SendErrorMessage($"积分不足！猜数字需要 {Config.GuessCost} 积分，当前有 {data.Points} 积分。");
+            plr.SendErrorMessage($"积分不足！需要 {Config.GuessCost} 积分，当前 {data.Points}。");
             return;
         }
 
@@ -440,13 +666,11 @@ public class Plugin : TerrariaPlugin
         if (win)
         {
             data.Points += Config.GuessReward;
-            msg = $"[{PluginName}] 你猜了 {guess}，答案是 [c/AAFFAA:{answer}] —— [c/AAFFAA:猜中了！]" +
-                  $" +{Config.GuessReward} 积分。当前积分: {data.Points}";
+            msg = $"[{PluginName}] 你猜了 {guess}，答案是 [c/AAFFAA:{answer}] —— 猜中了！+{Config.GuessReward} 积分。当前积分: {data.Points}";
         }
         else
         {
-            msg = $"[{PluginName}] 你猜了 {guess}，答案是 [c/FF8888:{answer}] —— [c/FF8888:没猜中……]" +
-                  $" -{Config.GuessCost} 积分。当前积分: {data.Points}";
+            msg = $"[{PluginName}] 你猜了 {guess}，答案是 [c/FF8888:{answer}] —— 没猜中…… -{Config.GuessCost} 积分。当前积分: {data.Points}";
         }
 
         plr.SendMessage(Utils.TextGradient(msg, plr),
@@ -460,7 +684,6 @@ public class Plugin : TerrariaPlugin
     {
         var plr = args.Player;
         if (!CheckRegistered(plr)) return;
-
         var data = Cache.GetOrCreate(plr.Name);
 
         if (args.Parameters.Count < 1)
@@ -470,8 +693,6 @@ public class Plugin : TerrariaPlugin
         }
 
         string targetName = args.Parameters[0];
-
-        // 【修复】手动查找玩家，替代 TShock.Utils.FindPlayer（TShock 6.x API 变更）
         var targets = TShock.Players
             .Where(p => p != null && p.Active && p.Name != null
                         && p.Name.Equals(targetName, StringComparison.OrdinalIgnoreCase))
@@ -484,7 +705,7 @@ public class Plugin : TerrariaPlugin
         }
         if (targets.Count > 1)
         {
-            plr.SendErrorMessage($"找到多个匹配玩家: {string.Join(", ", targets.Select(p => p.Name))}。请更精确指定。");
+            plr.SendErrorMessage($"找到多个匹配玩家: {string.Join(", ", targets.Select(p => p.Name))}。");
             return;
         }
 
@@ -501,24 +722,19 @@ public class Plugin : TerrariaPlugin
             plr.SendErrorMessage($"玩家 {target.Name} 尚未注册积分系统，无法抢劫。");
             return;
         }
-
-        // 冷却检查
         if (data.LastRobTime.HasValue)
         {
             var elapsed = (DateTime.UtcNow - data.LastRobTime.Value).TotalSeconds;
             if (elapsed < Config.RobCooldownSec)
             {
-                int remain = (int)(Config.RobCooldownSec - elapsed);
-                plr.SendErrorMessage($"抢劫冷却中，请等待 {FormatTime(remain)}。");
+                plr.SendErrorMessage($"抢劫冷却中，请等待 {FormatTime((int)(Config.RobCooldownSec - elapsed))}。");
                 return;
             }
         }
 
         data.LastRobTime = DateTime.UtcNow;
-
-        // 随机抢劫金额
         int stealAmount = Utils.Random.Next(Config.RobMinPoints, Config.RobMaxPoints + 1);
-        stealAmount = Math.Min(stealAmount, targetData.Points); // 不超过目标积分
+        stealAmount = Math.Min(stealAmount, targetData.Points);
 
         if (stealAmount <= 0)
         {
@@ -532,32 +748,23 @@ public class Plugin : TerrariaPlugin
         {
             targetData.Points -= stealAmount;
             data.Points += stealAmount;
-
             plr.SendMessage(
-                Utils.TextGradient(
-                    $"[{PluginName}] [c/AAFFAA:抢劫成功！]从 {target.Name} 处抢得 {stealAmount} 积分。当前积分: {data.Points}", plr),
+                Utils.TextGradient($"[{PluginName}] [c/AAFFAA:抢劫成功！]从 {target.Name} 处抢得 {stealAmount} 积分。当前积分: {data.Points}", plr),
                 Utils.color.R, Utils.color.G, Utils.color.B);
             target.SendMessage(
-                Utils.TextGradient(
-                    $"[{PluginName}] [c/FF8888:{plr.Name} 抢走了你 {stealAmount} 积分！]当前积分: {targetData.Points}", target),
+                Utils.TextGradient($"[{PluginName}] [c/FF8888:{plr.Name} 抢走了你 {stealAmount} 积分！]当前积分: {targetData.Points}", target),
                 Utils.color.R, Utils.color.G, Utils.color.B);
         }
         else
         {
-            int penalty = (int)(stealAmount * Config.RobFailurePenaltyRate);
-            penalty = Math.Max(1, penalty);
-            penalty = Math.Min(penalty, data.Points); // 不超过抢劫者积分
-
+            int penalty = Math.Max(1, Math.Min((int)(stealAmount * Config.RobFailurePenaltyRate), data.Points));
             data.Points -= penalty;
             targetData.Points += penalty;
-
             plr.SendMessage(
-                Utils.TextGradient(
-                    $"[{PluginName}] [c/FF8888:抢劫失败！]你被反抢，扣除 {penalty} 积分给 {target.Name}。当前积分: {data.Points}", plr),
+                Utils.TextGradient($"[{PluginName}] [c/FF8888:抢劫失败！]被反抢，扣除 {penalty} 积分。当前积分: {data.Points}", plr),
                 Utils.color.R, Utils.color.G, Utils.color.B);
             target.SendMessage(
-                Utils.TextGradient(
-                    $"[{PluginName}] [c/AAFFAA:{plr.Name} 试图抢劫你但失败了！]你获得 {penalty} 积分。当前积分: {targetData.Points}", target),
+                Utils.TextGradient($"[{PluginName}] [c/AAFFAA:{plr.Name} 试图抢劫你但失败了！]+{penalty} 积分。当前积分: {targetData.Points}", target),
                 Utils.color.R, Utils.color.G, Utils.color.B);
         }
 
@@ -576,7 +783,6 @@ public class Plugin : TerrariaPlugin
         else
             targetName = plr.Name;
 
-        // 【修复】手动查找在线玩家
         var matches = TShock.Players
             .Where(p => p != null && p.Active && p.Name != null
                         && p.Name.Equals(targetName, StringComparison.OrdinalIgnoreCase))
@@ -590,11 +796,10 @@ public class Plugin : TerrariaPlugin
         }
         else if (matches.Count > 1)
         {
-            plr.SendErrorMessage($"找到多个匹配玩家: {string.Join(", ", matches.Select(p => p.Name))}。请更精确指定。");
+            plr.SendErrorMessage($"找到多个匹配玩家: {string.Join(", ", matches.Select(p => p.Name))}。");
             return;
         }
 
-        // 如果不在线，尝试从缓存中查找
         if (targetPlr == null)
         {
             var key = Cache.Players.Keys.FirstOrDefault(
@@ -614,24 +819,21 @@ public class Plugin : TerrariaPlugin
             return;
         }
 
-        // 获取在线状态
         bool online = TShock.Players.Any(p => p != null && p.Active
             && p.Name != null && p.Name.Equals(targetName, StringComparison.OrdinalIgnoreCase));
         string status = online ? "[c/AAFFAA:在线]" : "[c/AAAAAA:离线]";
 
         var sb = new StringBuilder();
         sb.AppendLine($"══════ [c/FFD700:{targetName}] 的信息 ══════");
-        sb.AppendLine($"  状态      : {status}");
-        sb.AppendLine($"  积分      : [c/FFD700:{data.Points}]");
-        sb.AppendLine($"  累计签到  : {data.TotalSignIns} 次");
-        sb.AppendLine($"  连续签到  : {data.ConsecutiveSignIns} 天");
+        sb.AppendLine($"  状态       : {status}");
+        sb.AppendLine($"  积分       : [c/FFD700:{data.Points}]");
+        sb.AppendLine($"  抽奖仓库   : {data.LotteryStorage.Count} 件物品");
+        sb.AppendLine($"  累计签到   : {data.TotalSignIns} 次");
+        sb.AppendLine($"  连续签到   : {data.ConsecutiveSignIns} 天");
         if (data.LastSignInDate.HasValue)
-            sb.AppendLine($"  上次签到  : {data.LastSignInDate.Value:yyyy-MM-dd HH:mm}");
+            sb.AppendLine($"  上次签到   : {data.LastSignInDate.Value:yyyy-MM-dd HH:mm}");
         if (online && targetPlr != null)
-        {
-            sb.AppendLine($"  手持物品  : {Utils.ItemIcon(targetPlr.SelectedItem.type)} " +
-                $"{Lang.GetItemNameValue(targetPlr.SelectedItem.type)}");
-        }
+            sb.AppendLine($"  手持物品   : {Utils.ItemIcon(targetPlr.SelectedItem.type)} {Lang.GetItemNameValue(targetPlr.SelectedItem.type)}");
         sb.AppendLine($"══════════════════════════════");
 
         plr.SendMessage(Utils.TextGradient(sb.ToString(), plr),
@@ -652,7 +854,6 @@ public class Plugin : TerrariaPlugin
         string action = args.Parameters[0].ToLower();
         string targetName = args.Parameters[1];
 
-        // 大小写不敏感查找缓存中的玩家
         var key = Cache.Players.Keys.FirstOrDefault(
             k => k.Equals(targetName, StringComparison.OrdinalIgnoreCase));
         if (key == null)
@@ -666,22 +867,16 @@ public class Plugin : TerrariaPlugin
         {
             case "add":
                 if (args.Parameters.Count < 3 || !int.TryParse(args.Parameters[2], out int addAmt))
-                {
-                    plr.SendErrorMessage("请提供要增加的积分数量。");
-                    return;
-                }
+                { plr.SendErrorMessage("请提供要增加的积分数量。"); return; }
                 data.Points += addAmt;
                 plr.SendMessage(
-                    Utils.TextGradient($"[{PluginName}] 已为 {key} 增加 {addAmt} 积分，当前积分: {data.Points}"),
+                    Utils.TextGradient($"[{PluginName}] 已为 {key} 增加 {addAmt} 积分，当前: {data.Points}"),
                     Utils.color.R, Utils.color.G, Utils.color.B);
                 break;
 
             case "set":
                 if (args.Parameters.Count < 3 || !int.TryParse(args.Parameters[2], out int setAmt))
-                {
-                    plr.SendErrorMessage("请提供要设置的积分数量。");
-                    return;
-                }
+                { plr.SendErrorMessage("请提供要设置的积分数量。"); return; }
                 data.Points = Math.Max(0, setAmt);
                 plr.SendMessage(
                     Utils.TextGradient($"[{PluginName}] 已将 {key} 的积分设置为 {data.Points}"),
@@ -693,8 +888,9 @@ public class Plugin : TerrariaPlugin
                 data.TotalSignIns = 0;
                 data.ConsecutiveSignIns = 0;
                 data.LastSignInDate = null;
+                data.LotteryStorage.Clear();
                 plr.SendMessage(
-                    Utils.TextGradient($"[{PluginName}] 已重置 {key} 的积分和签到数据。"),
+                    Utils.TextGradient($"[{PluginName}] 已重置 {key} 的积分、签到和仓库数据。"),
                     Utils.color.R, Utils.color.G, Utils.color.B);
                 break;
 
@@ -704,11 +900,30 @@ public class Plugin : TerrariaPlugin
         }
 
         Cache.Save(CachePath);
-        TShock.Log.ConsoleInfo($"[{PluginName}] 管理员 {plr.Name} 执行了 {action} 操作于玩家 {key}。");
+        TShock.Log.ConsoleInfo($"[{PluginName}] 管理员 {plr.Name} 执行 {action} → {key}。");
     }
     #endregion
 
     // ======================== 辅助方法 ============================
+
+    #region 计算回收价值（基于物品基础价值 × 回收比例 × 堆叠数）
+    private static int CalcRecycleValue(int itemID, int stack)
+    {
+        try
+        {
+            // 通过 SetDefaults 创建临时 Item 获取其基础价值
+            Item tempItem = new Item();
+            tempItem.SetDefaults(itemID);
+            if (tempItem.value < Config.RecycleMinValue)
+                return 0;
+            return (int)(tempItem.value * Config.RecycleRate * stack);
+        }
+        catch
+        {
+            return 0;
+        }
+    }
+    #endregion
 
     #region 检查注册状态
     private bool CheckRegistered(TSPlayer plr)
@@ -723,15 +938,13 @@ public class Plugin : TerrariaPlugin
     }
     #endregion
 
-    #region 格式化秒数为可读时间
+    #region 格式化秒数
     private static string FormatTime(int totalSec)
     {
         if (totalSec < 60) return $"{totalSec}秒";
-        int min = totalSec / 60;
-        int sec = totalSec % 60;
+        int min = totalSec / 60, sec = totalSec % 60;
         if (min < 60) return $"{min}分{sec}秒";
-        int hour = min / 60;
-        min %= 60;
+        int hour = min / 60; min %= 60;
         return $"{hour}小时{min}分";
     }
     #endregion
