@@ -14,7 +14,7 @@ public class Plugin : TerrariaPlugin
     public const string PluginName = "积分系统";
     public override string Name => PluginName;
     public override string Author => "淦";
-    public override Version Version => new(1, 1, 1);
+    public override Version Version => new(1, 2, 0);
     public override string Description => "签到 · 抽奖 · 转账 · 仓库 · 掷骰子 · 猜数字 · 抢劫 · 回收 一体化积分系统";
     #endregion
 
@@ -26,6 +26,8 @@ public class Plugin : TerrariaPlugin
     #region 静态实例
     internal static Configuration Config = new();
     internal static CacheData Cache = new();
+    /// <summary>全物品抽奖池缓存 — 排除黑名单后的所有有效物品ID列表</summary>
+    private static List<int> _allItemPool = new();
     #endregion
 
     #region 构造函数
@@ -94,6 +96,10 @@ public class Plugin : TerrariaPlugin
         // ★★★ 新增：独立热重载指令（与 TShock 内置 /reload 同名，但权限为 points.reload）
         Commands.ChatCommands.Add(new Command("points.reload", CmdReloadPoints, "reload", "重载积分")
         { HelpText = "热重载积分系统配置文件（仅重载本插件配置，不重载整个 TShock）。" });
+
+        // ★★★ 新增：帮助指令
+        Commands.ChatCommands.Add(new Command("points.use", CmdHelp, "积分帮助", "积分help")
+        { HelpText = "查看积分系统所有指令及用法。" });
     }
     #endregion
 
@@ -123,7 +129,9 @@ public class Plugin : TerrariaPlugin
             Config = Configuration.Read(ConfigPath, out var cache);
             Cache = cache;
             Config.Write(ConfigPath, Cache);
-            TShock.Log.ConsoleInfo($"[{PluginName}] 配置加载成功。");
+            // ★ 重建全物品抽奖池缓存
+            BuildAllItemPool();
+            TShock.Log.ConsoleInfo($"[{PluginName}] 配置加载成功（全物品池: {_allItemPool.Count} 件）。");
         }
         catch (Exception ex)
         {
@@ -154,6 +162,86 @@ public class Plugin : TerrariaPlugin
             Utils.TextGradient($"[{PluginName}] 积分系统配置已热重载！", plr),
             Utils.color.R, Utils.color.G, Utils.color.B);
         TShock.Log.ConsoleInfo($"[{PluginName}] 玩家 {plr.Name} 使用 /reload 重载了积分系统配置。");
+    }
+
+    // ★★★ 新增：构建全物品抽奖池（排除黑名单）
+    private static void BuildAllItemPool()
+    {
+        _allItemPool = new List<int>();
+        int maxId;
+        try
+        {
+            // ItemID.Count 为泰拉瑞亚定义的物品总数
+            var field = typeof(Terraria.ID.ItemID).GetField("Count");
+            maxId = field != null ? (short)field.GetValue(null)! : 5500;
+        }
+        catch
+        {
+            maxId = 5500;
+        }
+        for (int id = 1; id < maxId; id++)
+        {
+            if (Config.LotteryBlacklist.Contains(id))
+                continue;
+            try
+            {
+                string? name = Lang.GetItemNameValue(id);
+                if (!string.IsNullOrEmpty(name))
+                    _allItemPool.Add(id);
+            }
+            catch
+            {
+                // 无效ID跳过
+            }
+        }
+    }
+
+    // ★★★ 新增：帮助命令 /积分帮助 [页码]
+    private void CmdHelp(CommandArgs args)
+    {
+        var plr = args.Player;
+        int page = 1;
+        if (args.Parameters.Count > 0)
+            int.TryParse(args.Parameters[0], out page);
+
+        var lines = new List<(string cmd, string desc)>
+        {
+            ("/注册 <密码>",         "注册积分系统账户（密码≥3字符）"),
+            ("/签到",                "每日签到获取积分，连续签到有额外奖励"),
+            ("/抽奖",                "消耗积分随机抽取物品，物品存入仓库"),
+            ("/仓库",                "查看抽奖仓库中暂存的物品及回收价值"),
+            ("/取物品 <序号|all>",   "从仓库领取物品到背包"),
+            ("/回收 <序号|all>",     "回收仓库物品换取积分"),
+            ("/转账 <玩家名> <数量>","向其他玩家转账积分"),
+            ("/掷骰子",              "掷骰子博弈，获胜赢得更多积分"),
+            ("/猜数字 <数字>",       "猜数字赢积分（范围可配置）"),
+            ("/抢劫 <玩家名>",       "抢劫其他在线玩家积分（有失败风险）"),
+            ("/查看 [玩家名]",       "查看自己或他人的积分、签到等信息"),
+            ("/积分管理 <add|set|reset> <玩家名> [数量]", "管理员操作积分数据"),
+            ("/reload",              "热重载积分系统配置（需 points.reload 权限）"),
+            ("/积分帮助 [页码]",     "显示此帮助信息"),
+        };
+
+        int perPage = 8;
+        int totalPages = (int)Math.Ceiling((double)lines.Count / perPage);
+        if (page < 1) page = 1;
+        if (page > totalPages) page = totalPages;
+        int start = (page - 1) * perPage;
+        int end = Math.Min(start + perPage, lines.Count);
+
+        var sb = new StringBuilder();
+        sb.AppendLine($"══════ [c/FFD700:{PluginName} 帮助] (第{page}/{totalPages}页) ══════");
+        for (int i = start; i < end; i++)
+        {
+            sb.AppendLine($"  [c/AAFFAA:{lines[i].cmd}]");
+            sb.AppendLine($"    {lines[i].desc}");
+        }
+        if (page < totalPages)
+            sb.AppendLine($"使用 /积分帮助 {page + 1} 查看下一页");
+        sb.AppendLine($"══════════════════════════════");
+
+        plr.SendMessage(Utils.TextGradient(sb.ToString(), plr),
+            Utils.color.R, Utils.color.G, Utils.color.B);
     }
     #endregion
 
@@ -263,49 +351,75 @@ public class Plugin : TerrariaPlugin
 
         var data = Cache.GetOrCreate(plr.Name);
 
-        if (Config.LotteryItems == null || Config.LotteryItems.Count == 0)
-        {
-            plr.SendErrorMessage("抽奖池为空，请联系管理员配置。");
-            return;
-        }
         if (data.Points < Config.LotteryCost)
         {
             plr.SendErrorMessage($"积分不足！抽奖需要 {Config.LotteryCost} 积分，你当前有 {data.Points} 积分。");
             return;
         }
 
+        // ★ 构建本次抽奖的有效池
+        int wonItemID, wonStack, wonPrefix;
+        if (Config.LotteryItems != null && Config.LotteryItems.Count > 0)
+        {
+            // ---- 白名单模式：从配置的列表中按权重抽取 ----
+            var validEntries = Config.LotteryItems
+                .Where(e => !Config.LotteryBlacklist.Contains(e.ItemID))
+                .ToList();
+            if (validEntries.Count == 0)
+            {
+                plr.SendErrorMessage("抽奖池为空（所有物品均在黑名单中），请联系管理员。");
+                return;
+            }
+            int totalWeight = validEntries.Sum(e => e.Weight);
+            int roll = Utils.Random.Next(totalWeight);
+            int cumulative = 0;
+            Configuration.LotteryEntry won = validEntries[0];
+            foreach (var entry in validEntries)
+            {
+                cumulative += entry.Weight;
+                if (roll < cumulative) { won = entry; break; }
+            }
+            wonItemID = won.ItemID;
+            wonStack = won.Stack;
+            wonPrefix = won.Prefix;
+        }
+        else
+        {
+            // ---- 全物品模式：从所有有效物品（排除黑名单）中随机抽取 ----
+            if (_allItemPool.Count == 0)
+            {
+                plr.SendErrorMessage("抽奖池为空（所有物品均在黑名单中），请联系管理员。");
+                return;
+            }
+            int idx = Utils.Random.Next(_allItemPool.Count);
+            wonItemID = _allItemPool[idx];
+            wonStack = 1;
+            wonPrefix = 0;
+        }
+
+        // 扣积分
         data.Points -= Config.LotteryCost;
 
-        int totalWeight = Config.LotteryItems.Sum(i => i.Weight);
-        int roll = Utils.Random.Next(totalWeight);
-        int cumulative = 0;
-        Configuration.LotteryEntry? won = null;
-        foreach (var entry in Config.LotteryItems)
-        {
-            cumulative += entry.Weight;
-            if (roll < cumulative) { won = entry; break; }
-        }
-        won ??= Config.LotteryItems[0];
-
+        // 存入仓库
         var stored = new CacheData.StoredItem
         {
             Id = Cache.NextStorageId(data),
-            ItemID = won.ItemID,
-            Stack = won.Stack,
-            Prefix = won.Prefix,
+            ItemID = wonItemID,
+            Stack = wonStack,
+            Prefix = wonPrefix,
             ObtainedAt = DateTime.UtcNow
         };
         data.LotteryStorage.Add(stored);
         Cache.Save(CachePath);
 
-        var itemName = Lang.GetItemNameValue(won.ItemID) ?? $"物品#{won.ItemID}";
-        int recycleValue = CalcRecycleValue(won.ItemID, won.Stack);
+        var itemName = Lang.GetItemNameValue(wonItemID) ?? $"物品#{wonItemID}";
+        int recycleValue = CalcRecycleValue(wonItemID, wonStack);
 
         plr.SendMessage(
             $"[c/FFD700:{PluginName}] 抽奖花费 {Config.LotteryCost} 积分，获得了：",
             Utils.color.R, Utils.color.G, Utils.color.B);
         plr.SendMessage(
-            $"  {Utils.ItemIcon(won.ItemID, won.Stack)} [c/FFD700:{itemName}]{(won.Stack > 1 ? $" x{won.Stack}" : "")}  (序号 #{stored.Id})",
+            $"  {Utils.ItemIcon(wonItemID, wonStack)} [c/FFD700:{itemName}]{(wonStack > 1 ? $" x{wonStack}" : "")}  (序号 #{stored.Id})",
             Utils.color.R, Utils.color.G, Utils.color.B);
         plr.SendMessage(
             $"  回收价值: {recycleValue} 积分 | 剩余积分: {data.Points}",

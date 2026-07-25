@@ -3,6 +3,9 @@ using System.Text.RegularExpressions;
 
 namespace PointsSystem;
 
+/// <summary>
+/// 插件配置文件
+/// </summary>
 internal class Configuration
 {
     #region 基础设置
@@ -82,8 +85,15 @@ internal class Configuration
     [JsonProperty("抽奖积分消耗", Order = 50)]
     public int LotteryCost { get; set; } = 20;
 
+    /// <summary>自定义抽奖物品列表（白名单）。
+    /// 列表非空时仅从这些物品中按权重抽取；
+    /// 列表为空时从全物品池中随机抽取（排除黑名单）。</summary>
     [JsonProperty("抽奖物品列表", Order = 51)]
-    public List<LotteryEntry> LotteryItems { get; set; } = DefaultLotteryItems();
+    public List<LotteryEntry>? LotteryItems { get; set; } = DefaultLotteryItems();
+
+    /// <summary>抽奖黑名单 — 无论白名单模式还是全物品模式，这些物品ID都不会被抽中。</summary>
+    [JsonProperty("抽奖黑名单", Order = 52)]
+    public List<int> LotteryBlacklist { get; set; } = new();
 
     /// <summary>默认抽奖列表（仅一处定义，避免重复）</summary>
     private static List<LotteryEntry> DefaultLotteryItems() => new()
@@ -95,7 +105,7 @@ internal class Configuration
     };
     #endregion
 
-    #region 回收设置
+    #region 回收设置（仅限抽奖仓库中的物品）
     [JsonProperty("回收比例", Order = 60)]
     public double RecycleRate { get; set; } = 0.5;
 
@@ -108,7 +118,7 @@ internal class Configuration
     public int TransferMinPoints { get; set; } = 1;
 
     [JsonProperty("转账手续费比例", Order = 71)]
-    public double TransferFeeRate { get; set; } = 0.0;
+    public double TransferFeeRate { get; set; } = 0.0; // 0 = 免手续费
     #endregion
 
     #region 抽奖物品条目
@@ -149,7 +159,7 @@ internal class Configuration
         {
             string json = File.ReadAllText(path);
 
-            // ★★★ 关键修复：Replace 模式杜绝默认值被追加到 JSON 列表后面
+            // ★ 使用 Replace 模式，杜绝列表被重复追加
             var settings = new JsonSerializerSettings
             {
                 ObjectCreationHandling = ObjectCreationHandling.Replace
@@ -157,7 +167,7 @@ internal class Configuration
 
             var cfg = JsonConvert.DeserializeObject<Configuration>(json, settings)!;
 
-            // 防御：如果配置中列表为 null，回填默认值（仅当 JSON 中明确为 null 时）
+            // 防御：如果配置中列表为 null，回填默认值
             if (cfg.LotteryItems == null || cfg.LotteryItems.Count == 0)
                 cfg.LotteryItems = DefaultLotteryItems();
 
