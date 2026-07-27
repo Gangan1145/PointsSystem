@@ -167,8 +167,9 @@ internal class Configuration
 
             var cfg = JsonConvert.DeserializeObject<Configuration>(json, settings)!;
 
-            // 防御：如果配置中列表为 null，回填默认值
-            if (cfg.LotteryItems == null || cfg.LotteryItems.Count == 0)
+            // 防御：仅当 JSON 中未定义该字段（null）时回填默认值。
+            // 空数组 [] 表示管理员有意启用全物品模式，不应回填。
+            if (cfg.LotteryItems == null)
                 cfg.LotteryItems = DefaultLotteryItems();
 
             cache = CacheData.Load(GetCachePath(path));
