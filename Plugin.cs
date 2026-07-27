@@ -14,7 +14,7 @@ public class Plugin : TerrariaPlugin
     public const string PluginName = "积分系统";
     public override string Name => PluginName;
     public override string Author => "淦";
-    public override Version Version => new(1, 2, 0);
+    public override Version Version => new(1, 2, 1);
     public override string Description => "签到 · 抽奖 · 转账 · 仓库 · 掷骰子 · 猜数字 · 抢劫 · 回收 一体化积分系统";
     #endregion
 
